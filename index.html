@@ -2,17 +2,19 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Neon Survivor</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; color: #0ff; }
-canvas { border: 1px solid #0ff; box-shadow: 0 0 20px #0ff; }
-#ui { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 0 8px #0ff; }
+body { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; color: #0ff; overflow: hidden; touch-action: none; }
+canvas { border: 1px solid #0ff; box-shadow: 0 0 20px #0ff; max-width: 100vw; max-height: 100vh; }
+#ui { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 0 8px #0ff; font-size: 0.85rem; white-space: nowrap; }
 #overlay { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
 #overlay h1 { font-size: 2.5rem; color: #f0f; text-shadow: 0 0 16px #f0f; }
-#overlay p { color: #0ff; text-shadow: 0 0 8px #0ff; }
+#overlay p { color: #0ff; text-shadow: 0 0 8px #0ff; text-align: center; padding: 0 16px; }
 button { background: transparent; border: 2px solid #0ff; color: #0ff; padding: 10px 32px; font-size: 1.1rem; font-family: monospace; cursor: pointer; text-shadow: 0 0 8px #0ff; box-shadow: 0 0 12px #0ff; transition: all 0.2s; }
 button:hover { background: #0ff2; box-shadow: 0 0 24px #0ff; }
+#joystick-zone { position: absolute; bottom: 0; left: 0; width: 100%; height: 200px; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -20,9 +22,10 @@ button:hover { background: #0ff2; box-shadow: 0 0 24px #0ff; }
   <span id="score">SCORE: 0</span> &nbsp;&nbsp; <span id="timer">TIME: 0s</span> &nbsp;&nbsp; <span id="wave">WAVE: 1</span>
 </div>
 <canvas id="c" width="600" height="500"></canvas>
+<div id="joystick-zone"></div>
 <div id="overlay">
   <h1>NEON SURVIVOR</h1>
-  <p>WASD / 방향키로 이동 &nbsp;|&nbsp; 자동 공격</p>
+  <p>WASD / 방향키 또는 화면 터치로 이동<br>자동 공격</p>
   <button onclick="startGame()">START</button>
 </div>
 
@@ -36,7 +39,53 @@ const waveEl = document.getElementById('wave');
 
 const W = canvas.width, H = canvas.height;
 const keys = {};
+const joystick = { active: false, id: null, baseX: 0, baseY: 0, dx: 0, dy: 0 };
 let player, bullets, enemies, particles, score, wave, elapsed, spawnTimer, bulletTimer, running;
+
+// Touch joystick
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (!joystick.active) {
+      joystick.active = true;
+      joystick.id = t.identifier;
+      joystick.baseX = t.clientX;
+      joystick.baseY = t.clientY;
+      joystick.dx = 0;
+      joystick.dy = 0;
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === joystick.id) {
+      const dx = t.clientX - joystick.baseX;
+      const dy = t.clientY - joystick.baseY;
+      const dist = Math.hypot(dx, dy);
+      const max = 50;
+      if (dist > max) {
+        joystick.dx = (dx / dist) * max;
+        joystick.dy = (dy / dist) * max;
+      } else {
+        joystick.dx = dx;
+        joystick.dy = dy;
+      }
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === joystick.id) {
+      joystick.active = false;
+      joystick.dx = 0;
+      joystick.dy = 0;
+    }
+  }
+}, { passive: false });
 
 document.addEventListener('keydown', e => { keys[e.key] = true; e.preventDefault(); });
 document.addEventListener('keyup', e => { keys[e.key] = false; });
@@ -77,10 +126,20 @@ function loop(ts) {
 
   // Move player
   const spd = player.speed * dt;
-  if (keys['ArrowLeft'] || keys['a'] || keys['A']) player.x = Math.max(player.r, player.x - spd);
-  if (keys['ArrowRight'] || keys['d'] || keys['D']) player.x = Math.min(W - player.r, player.x + spd);
-  if (keys['ArrowUp'] || keys['w'] || keys['W']) player.y = Math.max(player.r, player.y - spd);
-  if (keys['ArrowDown'] || keys['s'] || keys['S']) player.y = Math.min(H - player.r, player.y + spd);
+  let mx = 0, my = 0;
+  if (keys['ArrowLeft'] || keys['a'] || keys['A']) mx -= 1;
+  if (keys['ArrowRight'] || keys['d'] || keys['D']) mx += 1;
+  if (keys['ArrowUp'] || keys['w'] || keys['W']) my -= 1;
+  if (keys['ArrowDown'] || keys['s'] || keys['S']) my += 1;
+  if (joystick.active) {
+    const jdist = Math.hypot(joystick.dx, joystick.dy);
+    if (jdist > 8) { mx = joystick.dx / 50; my = joystick.dy / 50; }
+  }
+  const mlen = Math.hypot(mx, my);
+  if (mlen > 0) {
+    player.x = Math.max(player.r, Math.min(W - player.r, player.x + (mx / mlen) * spd));
+    player.y = Math.max(player.r, Math.min(H - player.r, player.y + (my / mlen) * spd));
+  }
 
   // Spawn enemies
   spawnTimer -= dt;
@@ -195,6 +254,22 @@ function loop(ts) {
   ctx.fillRect(player.x - 15, player.y - 20, 30, 4);
   ctx.fillStyle = '#0f0';
   ctx.fillRect(player.x - 15, player.y - 20, 30 * (player.hp / 5), 4);
+
+  // Joystick overlay
+  if (joystick.active) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const scaleY = H / rect.height;
+    const bx = (joystick.baseX - rect.left) * scaleX;
+    const by = (joystick.baseY - rect.top) * scaleY;
+    const nx = bx + joystick.dx * scaleX;
+    const ny = by + joystick.dy * scaleY;
+    ctx.strokeStyle = '#0ff4';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(bx, by, 50 * scaleX, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#0ff6';
+    ctx.beginPath(); ctx.arc(nx, ny, 18 * scaleX, 0, Math.PI * 2); ctx.fill();
+  }
 
   // UI
   ctx.shadowBlur = 0;
